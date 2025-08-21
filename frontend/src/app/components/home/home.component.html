@@ -1,0 +1,75 @@
+<div class="home-container">
+  <header class="header">
+    <img class="icon-title" src="../../../assets/beehive_icon_line.png" alt="">
+    <h1>Multi-Agent System</h1>
+    <p>Create and manage your multi-agent workflows</p>
+  </header>
+
+  <div class="actions">
+    <button 
+      *ngIf="!showCreateForm" 
+      (click)="showCreateForm = true" 
+      class="btn btn-primary"
+    >
+      Create New Use Case
+    </button>
+
+    <div *ngIf="showCreateForm" class="create-form">
+      <div class="form-group">
+        <label for="useCaseDescription">Describe your use case:</label>
+        <textarea
+          id="useCaseDescription"
+          [(ngModel)]="newUseCaseDescription"
+          rows="3"
+          class="form-control"
+          placeholder="E.g., I need a chatbot for customer support in my e-commerce store"
+        ></textarea>
+      </div>
+      <div class="form-actions">
+        <button 
+          (click)="createUseCase()" 
+          [disabled]="!newUseCaseDescription.trim() || isCreating"
+          class="btn btn-primary"
+        >
+          <span *ngIf="!isCreating">Create</span>
+          <span *ngIf="isCreating" class="spinner-border spinner-border-sm" role="status"></span>
+        </button>
+        <button 
+          (click)="showCreateForm = false" 
+          [disabled]="isCreating"
+          class="btn btn-outline-secondary"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="use-cases">
+    <h2>Your Use Cases</h2>
+    
+    <div *ngIf="isLoading" class="text-center py-4">
+      <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+    </div>
+
+    <div *ngIf="!isLoading && useCases.length === 0" class="empty-state">
+      <p>No use cases found. Create your first use case to get started!</p>
+    </div>
+
+    <div class="use-case-list">
+      <div *ngFor="let useCase of useCases" class="use-case-card" (click)="viewUseCase(useCase.id)">
+        <div class="use-case-content">
+          <h3>{{ useCase.description | truncate: 100 }}</h3>
+          <p class="meta">
+            <span class="badge bg-primary">{{ useCase.agents.length || 0 }} Agents</span>
+          </p>
+        </div>
+        <div class="use-case-actions">
+          <i class="fas fa-chevron-right"></i>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,1 +1,163 @@
-/* You can add global styles to this file, and also import other style files */
+$color-primary: #0A9396;   // Teal Futurista
+$color-secondary: #F6BD60; // Honey Yellow
+$color-dark: #001219;      // Dark Navy
+$color-light: #F9F9F9;     // Off White
+$color-highlight: #94D2BD; // Mint Green
+
+// Cores de acento
+$color-accent: #EE6C4D;    // Coral
+$color-text-dark: #3A3A3A; // Graphite
+
+// Escalas opcionais (tonalidades da principal)
+$color-primary-light: lighten($color-primary, 15%);
+$color-primary-dark: darken($color-primary, 15%);
+
+// Gradientes (se quiser usar em backgrounds)
+$gradient-primary: linear-gradient(135deg, $color-primary, $color-highlight);
+$gradient-dark: linear-gradient(135deg, $color-dark, $color-primary);
+
+// Global styles
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: $color-text-dark;
+  line-height: 1.5;
+  background-color: $color-light;
+}
+
+// Buttons
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out, 
+              border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.btn-primary {
+  color: $color-dark;
+  background-color: $color-secondary;
+  border-color: $color-secondary;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background-color: darken($color-secondary, 10%);
+  border-color: darken($color-secondary, 10%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.btn-outline-secondary {
+  color: $color-primary;
+  border-color: $color-primary;
+  background-color: transparent;
+}
+
+.btn-outline-secondary:hover {
+  color: white;
+  background-color: $color-primary;
+  border-color: $color-primary;
+}
+
+// Forms
+.form-control {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5;
+  color: $color-text-dark;
+  background-color: white;
+  background-clip: padding-box;
+  border: 1px solid lighten($color-primary, 30%);
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  border-radius: 0.375rem;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.form-control:focus {
+  border-color: $color-primary;
+  outline: 0;
+  box-shadow: 0 0 0 0.25rem rgba($color-primary, 0.25);
+}
+
+// Alerts
+.alert {
+  position: relative;
+  padding: 1rem 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+}
+
+.alert-danger {
+  color: $color-accent;
+  background-color: lighten($color-accent, 45%);
+  border-color: lighten($color-accent, 30%);
+}
+
+// Badges
+.badge {
+  display: inline-block;
+  padding: 0.35em 0.65em;
+  font-size: 0.75em;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: baseline;
+  border-radius: 0.375rem;
+}
+
+.bg-primary {
+  background-color: $color-primary !important;
+  color: white;
+}
+
+// Spacing utilities
+.mb-3 { margin-bottom: 1rem !important; }
+.mb-4 { margin-bottom: 1.5rem !important; }
+.mt-3 { margin-top: 1rem !important; }
+.mt-4 { margin-top: 1.5rem !important; }
+.ms-2 { margin-left: 0.5rem !important; }
+.me-2 { margin-right: 0.5rem !important; }
+.p-3 { padding: 1rem !important; }
+.p-4 { padding: 1.5rem !important; }
+
+// Text utilities
+.text-center { text-align: center !important; }
+.text-primary { color: $color-primary !important; }
+.text-muted { color: lighten($color-text-dark, 30%) !important; }
+
+// Flex utilities
+.d-flex { display: flex !important; }
+.flex-column { flex-direction: column !important; }
+.align-items-center { align-items: center !important; }
+.justify-content-center { justify-content: center !important; }
+.justify-content-between { justify-content: space-between !important; }
+
+// Icons
+.fas, .far, .fab {
+  font-style: normal;
+  font-variant: normal;
+  text-rendering: auto;
+  line-height: 1;
+}

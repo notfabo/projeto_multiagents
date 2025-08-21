@@ -1,195 +1,232 @@
 import os
-import uuid
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
-from typing import List, TypedDict, Annotated, Sequence
-import operator
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from typing import List
+from dotenv import load_dotenv
 
+# Importe seus modelos e schemas
+import models.models as models
+import schemas as schemas
+from database.setup_database import SessionLocal, engine
+
+# Importações do LangChain/LangGraph
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langgraph.graph import StateGraph, END
-from dotenv import load_dotenv
 
 load_dotenv()
 
-# --------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA API E DOCUMENTAÇÃO (SWAGGER)
-# --------------------------------------------------------------------------
+models.Base.metadata.create_all(bind=engine)
+
 app = FastAPI(
     title="Plataforma de Multiagentes Dinâmicos",
     description="Uma API para criar e orquestrar equipes de agentes inteligentes com base em casos de uso.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
-# --------------------------------------------------------------------------
-# 2. DEFINIÇÃO DOS MODELOS DE DADOS (PYDANTIC)
-# --------------------------------------------------------------------------
-class UseCaseRequest(BaseModel):
-    """Modelo para a requisição do usuário, contendo a descrição do caso de uso."""
-    description: str = Field(
-        ...,
-        examples=["Quero criar um fluxo de ponta a ponta para a compra e venda de carros usados."],
-        description="Descrição detalhada do problema ou fluxo que os agentes devem resolver."
-    )
+origins = [
+    "http://localhost:4200",
+]
 
-class ProposedAgent(BaseModel):
-    """Modelo para descrever um agente sugerido."""
-    role: str = Field(..., examples=["Agente Vendedor"], description="A especialidade ou 'cargo' do agente.")
-    responsibilities: str = Field(..., examples=["Encontrar potenciais compradores, negociar preços e fechar a venda."], description="As principais tarefas deste agente.")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class WorkflowResponse(BaseModel):
-    case_id: str = Field(default_factory=lambda: f"case_{uuid.uuid4().hex[:8]}")
-    proposed_agents: List[ProposedAgent]
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-class ConversationRequest(BaseModel):
-    case_id: str
-    user_input: str
-
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], operator.add]
-    next_agent: str
-
-# --------------------------------------------------------------------------
-# 3. CRIAÇÃO DO ENDPOINT INTELIGENTE
-# --------------------------------------------------------------------------
-llm = ChatOpenAI(model_name="gpt-4.1-nano", temperature=0.2)
-
-parser = PydanticOutputParser(pydantic_object=WorkflowResponse)
+# --- Configuração do LangChain (Arquiteto de Agentes) ---
+llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2) # Modelo mais recente e econômico
+parser = PydanticOutputParser(pydantic_object=schemas.WorkflowResponse)
 
 prompt_template = """
 Você é um arquiteto de sistemas de multiagentes. Sua tarefa é analisar a descrição de um caso de uso e decompor o problema em uma equipe de agentes especialistas.
-
 Para cada agente, defina claramente seu "role" (cargo/especialidade) e suas "responsibilities" (responsabilidades).
-
-Crie no máximo 3 agentes por caso.
-
+O último agente deve ser um 'Finalizador' ou 'Consolidador' que entrega a resposta final ao usuário.
 O caso de uso fornecido pelo usuário é:
 "{user_case_description}"
-
-Gere um ID de caso único no formato 'case_'.
-
 {format_instructions}
 """
 
 prompt = ChatPromptTemplate.from_template(
-    template=prompt_template, 
+    template=prompt_template,
     partial_variables={"format_instructions": parser.get_format_instructions()}
-    )
+)
 
 architect_chain = prompt | llm | parser
 
-workflows_in_memory = {}
-
+# --- Funções do Grafo (Reutilizáveis) ---
 def create_agent_node(role: str, responsibilities: str):
     """Função que cria uma 'chain' para um agente especialista."""
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", f"Você é um {role}. Suas responsabilidades são: {responsibilities}. Execute sua tarefa com base na conversa atual. Responda de forma concisa e focada na sua função."),
-        ("human", "{input}")
+    agent_prompt = ChatPromptTemplate.from_messages([
+        ("system", f"Você é um {role}. Suas responsabilidades são: {responsibilities}. Com base no histórico da conversa, execute sua tarefa. Responda de forma concisa e focada na sua função, passando o controle para o próximo agente ou finalizando a tarefa."),
+        ("placeholder", "{messages}")
     ])
-    return prompt | llm
+    return agent_prompt | llm
 
-def supervisor_router(state: AgentState):
-    """O 'gerente' que decide qual agente atua a seguir."""
-    print(f"--- Supervisor analisando o estado ---")
-    # Pega o último nome de agente da lista de mensagens
-    last_message_sender_role = state['messages'][-1].additional_kwargs.get("role", "user")
+def create_supervisor_chain(agent_roles: List[str]):
+    """Cria a 'chain' do supervisor que decide o próximo passo."""
+    options = agent_roles + ["FINISH"]
+    
+    supervisor_prompt = ChatPromptTemplate.from_messages([
+        ("system",
+         """Você é um supervisor de uma equipe de agentes de IA. Sua tarefa é analisar a conversa e decidir qual agente deve agir em seguida.
+         
+         Agentes disponíveis: {agent_roles}
+         
+         Com base na última mensagem, escolha o próximo passo. A tarefa está concluída e a resposta final foi dada? Se sim, responda com a palavra 'FINISH'.
+         Caso contrário, responda com o nome exato de um dos agentes da lista.
 
-    # Se a última mensagem foi do usuário ou do próprio supervisor, inicia o ciclo
-    if last_message_sender_role == "user" or last_message_sender_role == "supervisor":
-        return state['next_agent']
-    else: # Se um especialista acabou de falar, volta para o supervisor decidir
-        return "supervisor"
+         Sua resposta DEVE SER ESTRITAMENTE UMA das seguintes opções: {options}
+         NÃO adicione nenhuma outra palavra, pontuação ou explicação.
+         
+         Exemplo:
+         - Se o 'Agente de Viagens' deve agir, sua resposta deve ser:
+         Agente de Viagens
+         
+         - Se a tarefa acabou, sua resposta deve ser:
+         FINISH
+         """),
+        ("placeholder", "{messages}"),
+    ])
+    
+    return supervisor_prompt.partial(options=options) | llm
 
-@app.post("/create_workflow_from_case", response_model=WorkflowResponse)
-async def create_workflow(request: UseCaseRequest):
+# --- Endpoints da API ---
+
+@app.post("/use_cases/", response_model=schemas.UseCaseDB)
+async def create_use_case(request: schemas.UseCaseRequest, db: Session = Depends(get_db)):
     """
-    Recebe a descrição de um caso de uso e retorna uma proposta de equipe de agentes especialistas.
-    """
-    print(f"Recebido caso de uso: {request.description}")
-
-    response = await chain.ainvoke({"user_case_description": request.description})
-
-    return response
-
-@app.post("/design_workflow", response_model=WorkflowDesign)
-async def design_workflow(request: UseCaseRequest):
-    """
-    Passo 1: Projeta a equipe de agentes com base no caso de uso.
+    Passo 1: Recebe um caso de uso, projeta a equipe de agentes com a LLM
+    e salva o resultado no banco de dados.
     """
     print(f"Recebido caso de uso para design: {request.description}")
     
-    workflow_design = await architect_chain.ainvoke({"user_case_description": request.description})
-    
-    # --- Montagem dinâmica do Grafo com LangGraph ---
-    workflow = StateGraph(AgentState)
-    
-    # 1. Nó do Supervisor
-    supervisor_chain = ChatPromptTemplate.from_messages([
-        ("system", 
-         """Você é um supervisor de uma equipe de agentes de IA. Dada a conversa a seguir, selecione o próximo agente para agir ou responda 'FINISH' se a tarefa estiver concluída.
-         Agentes disponíveis: {agent_roles}"""),
-        ("human", "{input}"),
-    ]) | llm
+    # 1. Usar a LLM para projetar os agentes
+    try:
+        workflow_design = await architect_chain.ainvoke({"user_case_description": request.description})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao invocar a LLM: {e}")
 
-    agent_roles = [agent.role for agent in workflow_design.proposed_agents]
-    supervisor_node = supervisor_chain.with_config(
-        {"run_name": "Supervisor"}
-    ).with_retry(
-        stop_after_attempt=3
-    )
+    # 2. Criar e salvar o caso de uso no banco
+    db_use_case = models.UseCase(description=request.description)
+    db.add(db_use_case)
+    db.commit()
+    db.refresh(db_use_case)
 
-    workflow.add_node("supervisor", lambda state: {"messages": [AIMessage(content=supervisor_node.invoke({"agent_roles": ", ".join(agent_roles), "input": state['messages']}).content, additional_kwargs={"role": "supervisor"})]})
-
-    # 2. Nós dos Agentes Especialistas
+    # 3. Salvar as definições dos agentes vinculadas ao caso de uso
     for agent_spec in workflow_design.proposed_agents:
-        agent_node = create_agent_node(agent_spec.role, agent_spec.responsibilities)
-        workflow.add_node(agent_spec.role, lambda state, role=agent_spec.role: {"messages": [AIMessage(content=agent_node.invoke({"input": state['messages']}).content, additional_kwargs={"role": role})]})
+        db_agent = models.AgentDefinition(
+            use_case_id=db_use_case.id,
+            role=agent_spec.role,
+            responsibilities=agent_spec.responsibilities
+        )
+        db.add(db_agent)
+    
+    db.commit()
+    db.refresh(db_use_case) # Refresh para carregar os agentes recém-criados
+    
+    return db_use_case
 
-    # 3. Conexões (Edges)
+@app.post("/use_cases/{case_id}/conversation/", response_model=schemas.ConversationResponse)
+async def run_conversation(case_id: int, request: schemas.ConversationRequest, db: Session = Depends(get_db)):
+    """
+    Passo 2: Inicia uma conversa para um caso de uso existente.
+    Ele reconstrói o grafo dinamicamente a partir das definições do banco.
+    """
+    print(f"Iniciando conversa para o caso ID '{case_id}' com a entrada: '{request.user_input}'")
+
+    # 1. Buscar o caso de uso e seus agentes no banco
+    use_case = db.query(models.UseCase).filter(models.UseCase.id == case_id).first()
+    if not use_case or not use_case.agents:
+        raise HTTPException(status_code=404, detail="Caso de uso ou agentes não encontrados.")
+
+    # 2. Reconstruir o grafo dinamicamente
+    workflow = StateGraph(schemas.AgentState)
+    agent_roles = [agent.role for agent in use_case.agents]
+    
+    # Adicionar nós dos agentes
+    for agent in use_case.agents:
+        agent_node = create_agent_node(agent.role, agent.responsibilities)
+        workflow.add_node(agent.role, lambda state, role=agent.role: {"messages": [agent_node.invoke({"messages": state['messages']})]})
+
+    # Adicionar nó do supervisor
+    supervisor_chain = create_supervisor_chain(agent_roles)
+    workflow.add_node("supervisor", lambda state: {"messages": [supervisor_chain.invoke({"agent_roles": ", ".join(agent_roles), "messages": state['messages']})]})
+
+    # Definir as arestas (como os nós se conectam)
     for agent_role in agent_roles:
         workflow.add_edge(agent_role, "supervisor")
-        
-    workflow.add_conditional_edges(
-        "supervisor",
-        lambda state: state['messages'][-1].content, # Roteia com base no conteúdo da mensagem do supervisor
-        {role: role for role in agent_roles} | {"FINISH": END}
-    )
+
+    # O supervisor decide para onde ir
+    conditional_map = {role: role for role in agent_roles}
+    conditional_map["FINISH"] = END
+    workflow.add_conditional_edges("supervisor", lambda state: state['messages'][-1].content.strip(), conditional_map)
     
     workflow.set_entry_point("supervisor")
-    
-    # Compila o grafo e armazena em memória
     graph = workflow.compile()
-    workflows_in_memory[workflow_design.case_id] = graph
     
-    print(f"Workflow para o caso '{workflow_design.case_id}' criado e compilado.")
-    return workflow_design
+    # 3. Salvar o início da conversa no banco
+    db_conversation = models.Conversation(use_case_id=case_id)
+    db.add(db_conversation)
+    db.commit()
+    db.refresh(db_conversation)
+
+    initial_message = HumanMessage(content=request.user_input)
+    db_message = models.Message(conversation_id=db_conversation.id, sender_role="user", content=initial_message.content)
+    db.add(db_message)
+    db.commit()
+
+    # 4. Executar a conversa
+    final_state = None
+    async for state in graph.astream({"messages": [initial_message]}):
+        # A cada passo, você pode opcionalmente salvar as mensagens dos agentes no DB aqui
+        print(f"--- Estado do Grafo ---\n{state}\n")
+        final_state = state
+
+    final_messages = final_state['messages']
+    
+    # Salvar as mensagens geradas pelos agentes no DB
+    for msg in final_messages[1:]: # Ignora a mensagem inicial do usuário que já foi salva
+        if isinstance(msg, AIMessage):
+            db_agent_message = models.Message(
+                conversation_id=db_conversation.id,
+                sender_role=msg.name or "agent", # O nome do nó pode ser passado aqui
+                content=msg.content
+            )
+            db.add(db_agent_message)
+    db.commit()
+    
+    return {"conversation_id": db_conversation.id, "final_response": final_messages[-1].content}
 
 
-@app.post("/run_conversation")
-async def run_conversation(request: ConversationRequest):
+# --- ENDPOINTS ADICIONAIS ---
+
+@app.get("/use_cases/", response_model=List[schemas.UseCaseWithAgents])
+def get_all_use_cases(db: Session = Depends(get_db)):
     """
-    Passo 2: Executa uma conversa usando um workflow já projetado.
+    Retorna uma lista de todos os casos de uso criados e seus respectivos agentes.
     """
-    print(f"Iniciando conversa para o caso '{request.case_id}' com a entrada: '{request.user_input}'")
-    
-    graph = workflows_in_memory.get(request.case_id)
-    if not graph:
-        return {"error": "Workflow não encontrado. Por favor, crie o design primeiro."}
+    use_cases = db.query(models.UseCase).all()
+    return use_cases
 
-    initial_state = {
-        "messages": [HumanMessage(content=request.user_input, additional_kwargs={"role": "user"})]
-    }
-    
-    # O stream nos permite ver cada passo da conversa
-    response_stream = graph.astream(initial_state)
-    
-    final_response = None
-    async for step in response_stream:
-        # A chave 'supervisor' conterá a resposta final mais provável
-        if "supervisor" in step:
-            final_response = step["supervisor"]
-            print(f"--- Resposta Final --- \n {final_response}")
-
-    return final_response
+@app.get("/use_cases/{case_id}/", response_model=schemas.UseCaseDetails)
+def get_use_case_details(case_id: int, db: Session = Depends(get_db)):
+    """
+    Retorna todos os dados de um caso específico, incluindo agentes e histórico de conversas.
+    """
+    use_case = db.query(models.UseCase).filter(models.UseCase.id == case_id).first()
+    if not use_case:
+        raise HTTPException(status_code=404, detail="Caso de uso não encontrado.")
+    return use_case
